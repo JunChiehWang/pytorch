@@ -171,10 +171,15 @@ struct PythonPrintPass {
   SourceRangeStack source_range_stack_ = {SourceRange("")};
 
   struct WithSourceRange {
-    explicit WithSourceRange(SourceRangeStack* stack, SourceRange sr)
-        : stack(stack) {
+    explicit WithSourceRange(SourceRangeStack* stack, Node* n) : stack(stack) {
       TORCH_INTERNAL_ASSERT(stack);
-      stack->push_back(std::move(sr));
+      if (auto gen_source = n->sourceRange().findSourceRangeThatGenerated()) {
+        std::cout << "pushing original source range\n";
+        gen_source->highlight(std::cout);
+        stack->push_back(std::move(gen_source.value()));
+      } else {
+        stack->push_back(std::move(n->sourceRange()));
+      }
     }
 
     ~WithSourceRange() {
@@ -737,7 +742,7 @@ struct PythonPrintPass {
   }
 
   void printNode(Node* node, bool print_const) {
-    WithSourceRange guard(&source_range_stack_, node->sourceRange());
+    WithSourceRange guard(&source_range_stack_, node);
     // Check for class dependencies. If this node inputs or outputs a class
     // type, we need to add it to our table of dependencies.
     for (const auto input : node->inputs()) {
@@ -1130,8 +1135,7 @@ struct PythonPrintPass {
     Graph& graph = *func.graph();
     used_names_.clear(); // each graph can reuse local names
 
-    WithSourceRange guard(
-        &source_range_stack_, graph.param_node()->sourceRange());
+    WithSourceRange guard(&source_range_stack_, graph.param_node());
 
     indent();
     body_ << "def " << func.name() << "(";
@@ -1234,8 +1238,15 @@ struct PythonPrintPass {
   }
 
   void print(std::ostream& out, SourceRangeRecords& source_ranges_out) {
-    out << getImports() << body_.str();
-    source_ranges_out = body_.ranges();
+    out << getImports();
+    int64_t source_offset = out.tellp();
+    out << body_.str();
+    for (const auto& x : body_.ranges()) {
+      source_ranges_out.push_back(x);
+      source_ranges_out.back().bytes += source_offset;
+      std::cout << "offset " << source_ranges_out.back().bytes << "\n";
+      source_ranges_out.back().range.highlight(std::cout);
+    }
   }
 };
 
